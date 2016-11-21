@@ -1,2 +1,2 @@
 gatekeeper: gatekeeper.c
-	gcc -o gatekeepe gatekeeper.c -lwiringPi
+	gcc -o gatekeeper gatekeeper.c -lwiringPi
