@@ -24,15 +24,19 @@ const int loopWaitTime   = 200; //number of millisecs to wait between two loops
 #define CLOSING (2)
 #define IDLE    (3)
 
+//Current state and previous state of the GPIO pins
 int gateState,oldGateState;
 int ringer,oldRinger;
 int bus,oldBus;
+
+// timestamps of the previous events
 struct timespec gateStateLast;
 struct timespec ringerLast;
 struct timespec busLast;
 struct timespec eventTime;
 char date[100];
 
+//helper function to print the date to stdout
 void sprint_date(){
 	time_t now=time(NULL);
 	struct tm* local_time;
@@ -40,6 +44,7 @@ void sprint_date(){
 	strftime(date,sizeof(date),"%d/%m/%y %H:%M:%S",local_time);	
 };
 
+//helper function to return the delta in millis since last timestamp. Also reset the timestamp to now
 int get_delta_and_reset(struct timespec *event){
 	struct timespec eventTime;
 	clock_gettime(CLOCK_MONOTONIC_RAW,&eventTime);
@@ -47,6 +52,8 @@ int get_delta_and_reset(struct timespec *event){
 	*event=eventTime;
 	return (eventDuration);
 }
+
+//Main function
 int main(void)
 {
 
