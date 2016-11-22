@@ -1,28 +1,32 @@
 #include <stdio.h>    // Used for printf() statements
 #include <wiringPi.h> // Include WiringPi library!
 #include <time.h>
+#include <libconfig.h>
 
 // Pin number declarations. We're using the wiringPi chip pin numbers.
-const int motorPPin      = 0; // Motor pin (through optocoupler)
-const int motorNPin      = 1; // Motor pin (through optocoupler)
-const int ringPin        = 2; // Ring sense pin (through optocoupler)
-const int busSensePin    = 3; // Motor BUS pin (0 means someone's asking for motor to activate)
-const int busActivatePin = 4; // Relay command on Motor BUS
+// These will be overwritten by a config if there is one...
 
-const int activateBus    = 0;
-const int deactivateBus  = 1;
-const int busActivationTime = 500; // 500ms
+int motorPPin      = 0; // Motor pin (through optocoupler)
+int motorNPin      = 1; // Motor pin (through optocoupler)
+int ringPin        = 2; // Ring sense pin (through optocoupler)
+int busSensePin    = 3; // Motor BUS pin (0 means someone's asking for motor to activate)
+int busActivatePin = 4; // Relay command on Motor BUS
 
-const int busActivated   = 0; // GPIO state when bus is activated
-const int ringActivated  = 0; // GPIO state when ringer is activated
+int activateBus    = 0;
+int deactivateBus  = 1;
+int busActivationTime = 500; // 500ms
 
-const int loopWaitTime   = 200; //number of millisecs to wait between two loops
+int busActivated   = 0; // GPIO state when bus is activated
+int ringActivated  = 0; // GPIO state when ringer is activated
+
+int loopWaitTime   = 200; //number of millisecs to wait between two loops
 
 //GLOBALS
 #define ILLEGAL (0)
 #define OPENING (1)
 #define CLOSING (2)
 #define IDLE    (3)
+#define DEFAULT_CONFIG_FILE ("gatekeeper.cfg")
 
 //Current state and previous state of the GPIO pins
 int gateState,oldGateState;
@@ -53,11 +57,52 @@ int get_delta_and_reset(struct timespec *event){
 	return (eventDuration);
 }
 
+int parse_config_file(const char* config_file_name){
+    config_t cfg;
+    config_setting_t *root, *setting, *movie;
+
+    config_init(&cfg);
+
+    /* Read the file. If there is an error, report it and exit. */
+    if(! config_read_file(&cfg, config_file_name))
+    {
+        fprintf(stderr, "%s:%d - %s\n", config_error_file(&cfg),
+                config_error_line(&cfg), config_error_text(&cfg));
+        config_destroy(&cfg);
+        return(1);
+    }
+    // Config file parsed, let's use it !
+    if(config_lookup_int(&cfg,"motorPPin",&motorPPin)) 
+        printf("motorPPin changed to %d\n",motorPPin);     
+    if(config_lookup_int(&cfg,"motorNPin",&motorNPin)) 
+        printf("motorNPin changed to %d\n",motorNPin);         
+    if(config_lookup_int(&cfg,"ringPin",&ringPin))     
+        printf("ringPin changed to %d\n",ringPin);       
+    if(config_lookup_int(&cfg,"busSensePin",&busSensePin))          
+        printf("busSensePin changed to %d\n",busSensePin);   
+    if(config_lookup_int(&cfg,"busActivatePin",&busActivatePin))       
+        printf("busActivatePin changed to %d\n",busActivatePin);
+    if(config_lookup_int(&cfg,"activateBus",&activateBus))         
+    {printf("activateBus changed to %d\n",activateBus); deactivateBus = (activateBus==0)?1:0;}
+    if(config_lookup_int(&cfg,"busActivationTime",&busActivationTime))    
+        printf("busActivationTime changed to %d\n",busActivationTime);
+    if(config_lookup_int(&cfg,"busActivated",&busActivated))         
+        printf("busActivated changed to %d\n",busActivated);
+    if(config_lookup_int(&cfg,"ringActivated",&ringActivated))        
+        printf("ringActivated changed to %d\n",ringActivated);
+    if(config_lookup_int(&cfg,"loopWaitTime",&loopWaitTime))         
+        printf("loopWaitTime changed to %d\n",loopWaitTime);
+    return (0);
+}     
+
 //Main function
 int main(void)
 {
 
     // Setup stuff:
+    parse_config_file(DEFAULT_CONFIG_FILE); //TODO parse argv
+    
+    //GPIO setup
     wiringPiSetup(); // Initialize wiringPi -- using wiringPI pin numbers
 
     pinMode(motorPPin, INPUT); // Set Sense pin to input
