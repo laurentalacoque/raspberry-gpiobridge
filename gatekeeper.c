@@ -1,8 +1,17 @@
 #include <stdio.h>    // Used for printf() statements
 #include <wiringPi.h> // Include WiringPi library!
 #include <time.h>
+//configuration
 #include <libconfig.h>
+//microhttpd
+#include <sys/types.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <microhttpd.h>
+#include <string.h>
 
+// listening port
+#define PORT 8888
 // Pin number declarations. We're using the wiringPi chip pin numbers.
 // These will be overwritten by a config if there is one...
 
@@ -20,6 +29,8 @@ int busActivated   = 0; // GPIO state when bus is activated
 int ringActivated  = 0; // GPIO state when ringer is activated
 
 int loopWaitTime   = 200; //number of millisecs to wait between two loops
+
+int testhtmlactivate =0;
 
 //GLOBALS
 #define ILLEGAL (0)
@@ -94,6 +105,62 @@ int parse_config_file(const char* config_file_name){
         printf("loopWaitTime changed to %d\n",loopWaitTime);
     return (0);
 }     
+int answer_to_connection (void *cls, struct MHD_Connection *connection,
+        const char *url,
+        const char *method, const char *version,
+        const char *upload_data,
+        size_t *upload_data_size, void **con_cls)
+{
+    char page[200];
+    struct MHD_Response *response;
+    int ret;
+    //debug
+    printf("url : %s\nmethod : %s\nversion:%s\ndata_size:%d\n",url,method,version,upload_data_size);
+    
+    //we only support GET method
+    if (!strcmp("GET",method)){
+            if(!strcmp("/state",url)) {
+            snprintf(page,200,"GateState:%d\r\nRingState:%d\r\nBusState:%d\r\ntest:%d\r\n",gateState,ringer,bus,testhtmlactivate);
+            response = MHD_create_response_from_buffer (strlen (page),
+                    (void*) page, MHD_RESPMEM_MUST_COPY);
+            ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+            MHD_destroy_response (response);
+          }
+
+          else if(!strcmp("/activate",url)) {
+            snprintf(page,200,"<html><body>OK</body></html>");
+            //do something on ourselves
+            testhtmlactivate++;
+            //send the response
+            response = MHD_create_response_from_buffer (strlen (page),
+                    (void*) page, MHD_RESPMEM_MUST_COPY);
+            ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+            MHD_destroy_response (response);
+          }
+          else {
+            //catch all
+            snprintf(page,200,"<html><body><h1>404</h1><p>This was not found here</p></body></html>");
+            //do something on ourselves
+            testhtmlactivate++;
+            //send the response
+            response = MHD_create_response_from_buffer (strlen (page),
+                    (void*) page, MHD_RESPMEM_MUST_COPY);
+            ret = MHD_queue_response (connection, 404, response);
+            MHD_destroy_response (response);
+          }
+    }
+    else {
+        //only GET supported
+        snprintf(page,200,"<html><body><h1>403</h1><p>This is not allowed</p></body></html>");
+        //send the response
+        response = MHD_create_response_from_buffer (strlen (page),
+                (void*) page, MHD_RESPMEM_MUST_COPY);
+        ret = MHD_queue_response (connection, 403, response);
+        MHD_destroy_response (response);
+    }
+
+    return ret;
+}
 
 //Main function
 int main(void)
@@ -120,6 +187,15 @@ int main(void)
     get_delta_and_reset(&busLast);
 
     printf("Starting gate interface !\n");
+
+    //Webserver
+    struct MHD_Daemon *daemon;
+    daemon = MHD_start_daemon (MHD_USE_SELECT_INTERNALLY, PORT, NULL, NULL,
+            &answer_to_connection, NULL, MHD_OPTION_END);
+    if (NULL == daemon) {
+        fprintf(stderr,"Could not launch webserver\n");
+        return 1;
+    }
 
     // Loop (while(1)):
     while(1)
@@ -152,13 +228,14 @@ int main(void)
 	} 
 
 	// now save these variable for later
-        oldRinger=ringer;
-	oldBus =bus;
-	oldGateState=gateState;
+    oldRinger=ringer;
+    oldBus =bus;
+    oldGateState=gateState;
 
-        delay(loopWaitTime); // Wait 200ms again
+    delay(loopWaitTime); // Wait 200ms again
 
     }
 
+    MHD_stop_daemon (daemon);
     return 0;
 }
