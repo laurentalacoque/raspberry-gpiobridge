@@ -9,6 +9,19 @@
 #include <sys/socket.h>
 #include <microhttpd.h>
 #include <string.h>
+//http connection
+#include <assert.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include <netdb.h> /* getprotobyname */
+#include <netinet/in.h>
+#include <unistd.h>
+#define URLBUFSIZE 512
+#define REQBUFSIZE 512
+#define DATBUFSIZE 512
+int send_request(const char* hostname, unsigned short port, const char* URL);
 
 // listening port
 #define PORT 8888
@@ -239,3 +252,76 @@ int main(void)
     MHD_stop_daemon (daemon);
     return 0;
 }
+
+int send_request(const char* hostname, unsigned short port, const char* URL){
+    	char buffer[DATBUFSIZE];
+	char request[REQBUFSIZE];
+	struct protoent *protoent;
+	in_addr_t in_addr;
+	int request_len;
+	int socket_file_descriptor;
+	ssize_t nbytes_total, nbytes_last;
+	struct hostent *hostent;
+	struct sockaddr_in sockaddr_in;
+
+	/* build request */
+	request_len=snprintf(request,REQBUFSIZE,"GET %s HTTP/1.1\r\nHost: %s\r\n\r\n",URL,hostname);
+
+	/* Build the socket. */
+	protoent = getprotobyname("tcp");
+	if (protoent == NULL) { perror("getprotobyname"); return (1); }
+
+	socket_file_descriptor = socket(AF_INET, SOCK_STREAM, protoent->p_proto);
+	if (socket_file_descriptor == -1) { perror("socket"); return (1); }
+
+	/* Build the address. */
+	hostent = gethostbyname(hostname);
+	if (hostent == NULL) { fprintf(stderr, "error: gethostbyname(\"%s\")\n", hostname); return (1); }
+
+	in_addr = inet_addr(inet_ntoa(*(struct in_addr*)*(hostent->h_addr_list)));
+	if (in_addr == (in_addr_t)-1) { fprintf(stderr, "error: inet_addr(\"%s\")\n", *(hostent->h_addr_list)); return (1); }
+
+	sockaddr_in.sin_addr.s_addr = in_addr;
+	sockaddr_in.sin_family = AF_INET;
+	sockaddr_in.sin_port = htons(port);
+
+	/* Actually connect. */
+	if (connect(socket_file_descriptor, (struct sockaddr*)&sockaddr_in, sizeof(sockaddr_in)) == -1) { perror("connect"); return (1); }
+
+	/* Send HTTP request. */
+	nbytes_total = 0;
+	while (nbytes_total < request_len) {
+		nbytes_last = write(socket_file_descriptor, request + nbytes_total, request_len - nbytes_total);
+		if (nbytes_last == -1) { perror("write"); return (1); }
+		nbytes_total += nbytes_last;
+	}
+
+	/*
+	   Read the response. 
+	*/
+	nbytes_total = 0;
+	while ((nbytes_total = read(socket_file_descriptor, buffer, DATBUFSIZE))  > 0 ) {
+		fprintf(stdout,"###### reading %d bytes\n",DATBUFSIZE);
+		write(STDOUT_FILENO, buffer, nbytes_total);
+		fprintf(stdout,"<<<<<< read %d bytes\n",nbytes_total);
+		if(nbytes_total < DATBUFSIZE) break;
+	}
+	if (nbytes_total == -1) {
+		perror("read");
+		return (1);
+	}
+
+	close(socket_file_descriptor);
+	return(0);
+}
+/*
+int main(int argc, char** argv) {
+	if(send_request("example.com", 80, "/")){
+		fprintf(stderr,"Error\n");
+	}	
+	if(send_request("example.com", 80, "/")){
+		fprintf(stderr,"Error\n");
+	}	
+	return 0;
+}
+*/
