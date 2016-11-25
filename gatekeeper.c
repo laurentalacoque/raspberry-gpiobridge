@@ -153,8 +153,6 @@ int answer_to_connection (void *cls, struct MHD_Connection *connection,
           else {
             //catch all
             snprintf(page,200,"<html><body><h1>404</h1><p>This was not found here</p></body></html>");
-            //do something on ourselves
-            testhtmlactivate++;
             //send the response
             response = MHD_create_response_from_buffer (strlen (page),
                     (void*) page, MHD_RESPMEM_MUST_COPY);
