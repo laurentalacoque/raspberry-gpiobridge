@@ -19,7 +19,8 @@
 #include <netinet/in.h>
 #include <unistd.h>
 int http_send_request(const char* hostname, unsigned short port, const char* URL);
-
+// OPENING TIME 25200
+// CLOSING TIME 32100
 // listening port
 #define PORT 8888
 // Pin number declarations. We're using the wiringPi chip pin numbers.
@@ -27,8 +28,8 @@ int http_send_request(const char* hostname, unsigned short port, const char* URL
 
 int motorPPin      = 0; // Motor pin (through optocoupler)
 int motorNPin      = 1; // Motor pin (through optocoupler)
-
-int loopWaitTime   = 200; //number of millisecs to wait between two loops
+int maxIdleTimeBeforeEvent = 2000; // Wait 2s before event generation
+int loopWaitTime   = 100; //number of millisecs to wait between two loops
 
 int testhtmlactivate =0;
 
@@ -44,6 +45,7 @@ int gateState,oldGateState;
 
 // timestamps of the previous events
 struct timespec gateStateLast;
+struct timespec idleLast;
 struct timespec eventTime;
 char date[100];
 
@@ -157,28 +159,54 @@ int main(void)
         fprintf(stderr,"Could not launch webserver\n");
         return 1;
     }
-
+    int openDuration=0;
+    int idleDuration=0;
     // Loop (while(1)):
     while(1)
     {
-	gateState = digitalRead(motorPPin) << 1 | digitalRead(motorNPin);
-	if (gateState != oldGateState) {
-		sprint_date();
-		printf("%s Motor changed to: ",date);
-		switch (gateState) {
-		case ILLEGAL: printf("illegal"); break;
-		case OPENING: printf("opening"); break;
-		case CLOSING: printf("closing"); break;
-		case IDLE:    printf("idle"); break;
-		default:      printf("unknown"); break;
-		}
-		printf("\t+%d\n",get_delta_and_reset(&gateStateLast));
-	}
+        gateState = digitalRead(motorPPin) << 1 | digitalRead(motorNPin);
+        //reset idletime if needed
+        if (gateState != IDLE) { idleDuration =0; get_delta_and_reset(&idleLast);}
+        //check for state change
+        if (gateState != oldGateState) {
+            int eventDelay = get_delta_and_reset(&gateStateLast);
+            //detect start of opening and closing events
+            if (openDuration == 0) {
+                if (gateState == OPENING) { printf(">>> OPENING START\n"); }
+                else if (gateState == CLOSING) { printf(">>> CLOSING START\n");}
+            }
+            //cumulate closing and opening time
+            if (oldGateState == OPENING) openDuration += eventDelay;
+            else if (oldGateState == CLOSING) openDuration -= eventDelay;
+            /*
+            sprint_date();
+            printf("%s Motor changed to: ",date);
+            switch (gateState) {
+                case ILLEGAL: printf("illegal"); break;
+                case OPENING: printf("opening"); break;
+                case CLOSING: printf("closing"); break;
+                case IDLE:    printf("idle"); break;
+                default:      printf("unknown"); break;
+            }
+            printf("\t+%d\n",eventDelay);
+            */
+            sprint_date();
+            printf("%s currentstate %d openingDuration %d\n",date,gateState,openDuration);
+        } else if (gateState == IDLE && oldGateState == IDLE) {
+            // cumulate idle duration
+            idleDuration += get_delta_and_reset(&idleLast);
+            // if idle for more than a given time, generate end event
+            if ((openDuration !=0) && (idleDuration > maxIdleTimeBeforeEvent)) {
+                sprint_date();
+                printf(">>> CLOSING OR OPENING ENDS %s openingDuration %d\n",date,openDuration);
+                openDuration =0;
+            }
+        }
 
-	// now save these variable for later
-    oldGateState=gateState;
+        // now save these variable for later
+        oldGateState=gateState;
 
-    delay(loopWaitTime); // Wait 200ms again
+        delay(loopWaitTime); // Wait 200ms again
 
     }
 
