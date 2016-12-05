@@ -102,7 +102,7 @@ int answer_to_connection (void *cls, struct MHD_Connection *connection,
     //we only support GET method
     if (!strcmp("GET",method)){
             if(!strcmp("/state",url)) {
-            snprintf(page,200,"GateState:%d\r\nRingState:%d\r\nBusState:%d\r\ntest:%d\r\n",gateState,ringer,bus,testhtmlactivate);
+            snprintf(page,200,"GateState:%d\r\ntest:%d\r\n",gateState,testhtmlactivate);
             response = MHD_create_response_from_buffer (strlen (page),
                     (void*) page, MHD_RESPMEM_MUST_COPY);
             ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
