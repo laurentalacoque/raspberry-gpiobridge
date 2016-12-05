@@ -18,10 +18,7 @@
 #include <netdb.h> /* getprotobyname */
 #include <netinet/in.h>
 #include <unistd.h>
-#define URLBUFSIZE 512
-#define REQBUFSIZE 512
-#define DATBUFSIZE 512
-int send_request(const char* hostname, unsigned short port, const char* URL);
+int http_send_request(const char* hostname, unsigned short port, const char* URL);
 
 // listening port
 #define PORT 8888
@@ -30,16 +27,6 @@ int send_request(const char* hostname, unsigned short port, const char* URL);
 
 int motorPPin      = 0; // Motor pin (through optocoupler)
 int motorNPin      = 1; // Motor pin (through optocoupler)
-int ringPin        = 2; // Ring sense pin (through optocoupler)
-int busSensePin    = 3; // Motor BUS pin (0 means someone's asking for motor to activate)
-int busActivatePin = 4; // Relay command on Motor BUS
-
-int activateBus    = 0;
-int deactivateBus  = 1;
-int busActivationTime = 500; // 500ms
-
-int busActivated   = 0; // GPIO state when bus is activated
-int ringActivated  = 0; // GPIO state when ringer is activated
 
 int loopWaitTime   = 200; //number of millisecs to wait between two loops
 
@@ -54,13 +41,9 @@ int testhtmlactivate =0;
 
 //Current state and previous state of the GPIO pins
 int gateState,oldGateState;
-int ringer,oldRinger;
-int bus,oldBus;
 
 // timestamps of the previous events
 struct timespec gateStateLast;
-struct timespec ringerLast;
-struct timespec busLast;
 struct timespec eventTime;
 char date[100];
 
@@ -100,20 +83,6 @@ int parse_config_file(const char* config_file_name){
         printf("motorPPin changed to %d\n",motorPPin);     
     if(config_lookup_int(&cfg,"motorNPin",&motorNPin)) 
         printf("motorNPin changed to %d\n",motorNPin);         
-    if(config_lookup_int(&cfg,"ringPin",&ringPin))     
-        printf("ringPin changed to %d\n",ringPin);       
-    if(config_lookup_int(&cfg,"busSensePin",&busSensePin))          
-        printf("busSensePin changed to %d\n",busSensePin);   
-    if(config_lookup_int(&cfg,"busActivatePin",&busActivatePin))       
-        printf("busActivatePin changed to %d\n",busActivatePin);
-    if(config_lookup_int(&cfg,"activateBus",&activateBus))         
-    {printf("activateBus changed to %d\n",activateBus); deactivateBus = (activateBus==0)?1:0;}
-    if(config_lookup_int(&cfg,"busActivationTime",&busActivationTime))    
-        printf("busActivationTime changed to %d\n",busActivationTime);
-    if(config_lookup_int(&cfg,"busActivated",&busActivated))         
-        printf("busActivated changed to %d\n",busActivated);
-    if(config_lookup_int(&cfg,"ringActivated",&ringActivated))        
-        printf("ringActivated changed to %d\n",ringActivated);
     if(config_lookup_int(&cfg,"loopWaitTime",&loopWaitTime))         
         printf("loopWaitTime changed to %d\n",loopWaitTime);
     return (0);
@@ -134,17 +103,6 @@ int answer_to_connection (void *cls, struct MHD_Connection *connection,
     if (!strcmp("GET",method)){
             if(!strcmp("/state",url)) {
             snprintf(page,200,"GateState:%d\r\nRingState:%d\r\nBusState:%d\r\ntest:%d\r\n",gateState,ringer,bus,testhtmlactivate);
-            response = MHD_create_response_from_buffer (strlen (page),
-                    (void*) page, MHD_RESPMEM_MUST_COPY);
-            ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
-            MHD_destroy_response (response);
-          }
-
-          else if(!strcmp("/activate",url)) {
-            snprintf(page,200,"<html><body>OK</body></html>");
-            //do something on ourselves
-            testhtmlactivate++;
-            //send the response
             response = MHD_create_response_from_buffer (strlen (page),
                     (void*) page, MHD_RESPMEM_MUST_COPY);
             ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
@@ -185,17 +143,9 @@ int main(void)
 
     pinMode(motorPPin, INPUT); // Set Sense pin to input
     pinMode(motorNPin, INPUT); // Set Sense pin to input
-    pinMode(ringPin,   INPUT); // Set Sense pin to input
-    pinMode(busSensePin, INPUT); // Set Sense pin to input
-
-    pinMode(busActivatePin, OUTPUT);     // Set regular LED as output
     
     oldGateState=0xFF;
-    oldRinger=0xFF;
-    oldBus=0xFF;
     get_delta_and_reset(&gateStateLast);
-    get_delta_and_reset(&ringerLast);
-    get_delta_and_reset(&busLast);
 
     printf("Starting gate interface !\n");
 
@@ -211,10 +161,7 @@ int main(void)
     // Loop (while(1)):
     while(1)
     {
-	delay(102);
 	gateState = digitalRead(motorPPin) << 1 | digitalRead(motorNPin);
-	ringer = digitalRead(ringPin);
-	bus = digitalRead(busSensePin);
 	if (gateState != oldGateState) {
 		sprint_date();
 		printf("%s Motor changed to: ",date);
@@ -227,20 +174,8 @@ int main(void)
 		}
 		printf("\t+%d\n",get_delta_and_reset(&gateStateLast));
 	}
-	if (ringer != oldRinger) {
-		sprint_date();
-		if (ringer == ringActivated) printf("%s Ringer Activated\t+%d\n",date,get_delta_and_reset(&ringerLast));
-		else printf("%s Ringer Deactivated\t+%d\n",date,get_delta_and_reset(&ringerLast));
-	}
-	if (bus != oldBus) {
-		sprint_date();
-		if (bus == busActivated) printf("%s Bus Activated\t+%d\n",date,get_delta_and_reset(&busLast));
-		else printf("%s Bus Deactivated\t+%d\n",date,date,get_delta_and_reset(&busLast));
-	} 
 
 	// now save these variable for later
-    oldRinger=ringer;
-    oldBus =bus;
     oldGateState=gateState;
 
     delay(loopWaitTime); // Wait 200ms again
@@ -251,7 +186,12 @@ int main(void)
     return 0;
 }
 
-int send_request(const char* hostname, unsigned short port, const char* URL){
+//This code mainly comes from this answer on stackoverflow: http://stackoverflow.com/a/35680609/940745
+//It was adapted to fit in this scheme
+#define URLBUFSIZE 512
+#define REQBUFSIZE 512
+#define DATBUFSIZE 512
+int http_send_request(const char* hostname, unsigned short port, const char* URL){
     	char buffer[DATBUFSIZE];
 	char request[REQBUFSIZE];
 	struct protoent *protoent;
@@ -299,9 +239,8 @@ int send_request(const char* hostname, unsigned short port, const char* URL){
 	*/
 	nbytes_total = 0;
 	while ((nbytes_total = read(socket_file_descriptor, buffer, DATBUFSIZE))  > 0 ) {
-		fprintf(stdout,"###### reading %d bytes\n",DATBUFSIZE);
-		write(STDOUT_FILENO, buffer, nbytes_total);
-		fprintf(stdout,"<<<<<< read %d bytes\n",nbytes_total);
+		//write(STDOUT_FILENO, buffer, nbytes_total);
+        //TODO save content to a char* ?
 		if(nbytes_total < DATBUFSIZE) break;
 	}
 	if (nbytes_total == -1) {
@@ -314,10 +253,10 @@ int send_request(const char* hostname, unsigned short port, const char* URL){
 }
 /*
 int main(int argc, char** argv) {
-	if(send_request("example.com", 80, "/")){
+	if(http_send_request("example.com", 80, "/")){
 		fprintf(stderr,"Error\n");
 	}	
-	if(send_request("example.com", 80, "/")){
+	if(http_send_request("example.com", 80, "/")){
 		fprintf(stderr,"Error\n");
 	}	
 	return 0;
