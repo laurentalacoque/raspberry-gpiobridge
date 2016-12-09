@@ -18,6 +18,13 @@
 #include <netdb.h> /* getprotobyname */
 #include <netinet/in.h>
 #include <unistd.h>
+//interrupt some signals
+#include <signal.h>
+
+//signal handler
+void sig_handler(int sig);
+
+//prototype for push function
 int http_send_request(const char* hostname, unsigned short port, const char* URL);
 // OPENING TIME 25200
 // CLOSING TIME 32100
@@ -45,7 +52,7 @@ const char* PCEURL       = NULL;
 enum openState_t {unknown, opening, open, closing, closed};
 enum openState_t openState;
 int isOpen = 0;
-
+int exitLoop = 0;
 
 int testhtmlactivate =0;
 
@@ -113,9 +120,11 @@ int main(int argc, char** argv)
 
     get_delta_and_reset(&gateStateLast);
     printf("Starting gate interface !\n");
+    //install signal handler to quit when killed
+    signal(SIGINT,&sig_handler);
+    signal(SIGTERM,&sig_handler);
 
     //Webserver init
-    
     struct MHD_Daemon *daemon;
     if (launchServer){
         daemon = MHD_start_daemon (MHD_USE_SELECT_INTERNALLY, serverPort, NULL, NULL,
@@ -132,7 +141,7 @@ int main(int argc, char** argv)
     int openDuration=0;
     int idleDuration=0;
     // Loop (while(1)):
-    while(1)
+    while(!exitLoop)
     {
         gateState = digitalRead(motorPPin) << 1 | digitalRead(motorNPin);
         //reset idletime if needed
@@ -435,4 +444,9 @@ int report_event(enum openState_t openState, int isOpen){
         if (http_send_request(pushHost,pushPort,finalURL)) printf(" FAIL\n");
         else printf(" OK\n");
     }
+}
+
+//signal handler (break + kill)
+void sig_handler(int sig){
+    exitLoop = 1;
 }
