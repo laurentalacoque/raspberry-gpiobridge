@@ -213,7 +213,7 @@ int main(int argc, char** argv)
                     case closed:
                         openState=closed;
                         isOpen=0;
-                        sqlite_log(db,date,"C",openDuration);
+                        sqlite_log(db,date,"C",-openDuration);
                         break;
                     default:
                         openState=unknown;
