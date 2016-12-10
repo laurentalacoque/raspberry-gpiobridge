@@ -471,12 +471,6 @@ int sqlite_log(sqlite3* db, const char* timestamp, const char* event_type,int la
     char* error;
     int rc;
     snprintf(req,500,"INSERT INTO eventlog(ts,type,length) VALUES('%s','%s',0);",timestamp,event_type);
-    rc=sqlite3_exec(db,req,0,0,&error);
-    if (rc != SQLITE_OK){
-        fprintf(stderr, "sqlite insert error %d: %s\nrequest:%s\n",rc,error,req);
-        sqlite3_free(error);
-        return(rc);
-    }
     //update event duration
     if (lastDuration >0){
         snprintf(req,500,"update eventlog set length = %d where id = (select max(id) from eventlog limit 1);",lastDuration);
@@ -486,6 +480,12 @@ int sqlite_log(sqlite3* db, const char* timestamp, const char* event_type,int la
             sqlite3_free(error);
             return(rc);
         }
+    }
+    rc=sqlite3_exec(db,req,0,0,&error);
+    if (rc != SQLITE_OK){
+        fprintf(stderr, "sqlite insert error %d: %s\nrequest:%s\n",rc,error,req);
+        sqlite3_free(error);
+        return(rc);
     }
 }
 
