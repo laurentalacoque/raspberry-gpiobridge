@@ -18,11 +18,17 @@
 #include <netdb.h> /* getprotobyname */
 #include <netinet/in.h>
 #include <unistd.h>
-//interrupt some signals
+//interrupt SIGTERM and SIGBREAK to safely close everything
 #include <signal.h>
+//log events
+#include <sqlite3.h>
+
 
 //signal handler
 void sig_handler(int sig);
+//database create
+int create_db(sqlite3 *db);
+int sqlite_log(sqlite3* db, const char* timestamp, const char* event_type,int lastDuration);
 
 //prototype for push function
 int http_send_request(const char* hostname, unsigned short port, const char* URL);
@@ -55,6 +61,8 @@ int isOpen = 0;
 int exitLoop = 0;
 
 int testhtmlactivate =0;
+
+const char* sqliteDBName = NULL; //default db null (no db)
 
 //GLOBALS
 #define ILLEGAL (0)
@@ -89,6 +97,8 @@ int report_event(enum openState_t openState, int isOpen);
 //Main function
 int main(int argc, char** argv)
 {
+    sqlite3* db=NULL;
+    int rc;
 
     char* config_file=DEFAULT_CONFIG_FILE;
     // check arguments
@@ -124,9 +134,24 @@ int main(int argc, char** argv)
     signal(SIGINT,&sig_handler);
     signal(SIGTERM,&sig_handler);
 
+    //sqlite3 init
+    if (sqliteDBName != NULL){
+        //try to open the file
+        printf("--- Opening database %s\n",sqliteDBName);
+        rc = sqlite3_open(sqliteDBName,&db);
+        if (rc != SQLITE_OK){
+            fprintf(stderr,"Can't open database %s : %s\n",sqliteDBName,sqlite3_errmsg(db));
+            db=NULL;
+        }
+        create_db(db);
+        sprint_date();
+        sqlite_log(db,date,"B",0);
+    }
+
     //Webserver init
     struct MHD_Daemon *daemon;
     if (launchServer){
+        printf("--- Starting webserver\n");
         daemon = MHD_start_daemon (MHD_USE_SELECT_INTERNALLY, serverPort, NULL, NULL,
             &answer_to_connection, NULL, MHD_OPTION_END);
         if (NULL == daemon) {
@@ -137,7 +162,9 @@ int main(int argc, char** argv)
             printf("Listening on port %d\n",serverPort);
         }
     }
-
+    /****************************************************
+     * Event Detection Loop
+     ***************************************************/
     int openDuration=0;
     int idleDuration=0;
     // Loop (while(1)):
@@ -156,47 +183,37 @@ int main(int argc, char** argv)
                     printf(">>> OPENING START %s\n",date); 
                     openState=opening; 
                     isOpen=1;
+                    sqlite_log(db,date,"o",eventDelay);
                 } else if (gateState == CLOSING) { 
                     printf(">>> CLOSING START %s\n",date); 
                     openState=closing; 
                     isOpen=0;
+                    sqlite_log(db,date,"c",eventDelay);
                 }
                 report_event(openState,isOpen);
             }
             //cumulate closing and opening time
             if (oldGateState == OPENING) openDuration += eventDelay;
             else if (oldGateState == CLOSING) openDuration -= eventDelay;
-            /*
-            sprint_date();
-            printf("%s Motor changed to: ",date);
-            switch (gateState) {
-                case ILLEGAL: printf("illegal"); break;
-                case OPENING: printf("opening"); break;
-                case CLOSING: printf("closing"); break;
-                case IDLE:    printf("idle"); break;
-                default:      printf("unknown"); break;
-            }
-            printf("\t+%d\n",eventDelay);
-            */
-            //sprint_date();
-            //printf("%s currentstate %d openingDuration %d\n",date,gateState,openDuration);
         } else if (gateState == IDLE && oldGateState == IDLE) {
             // cumulate idle duration
             idleDuration += get_delta_and_reset(&idleLast);
             // if idle for more than a given time, generate end event
             if ((openDuration !=0) && (idleDuration > maxIdleTimeBeforeEvent)) {
                 sprint_date();
-                printf(">>> CLOSING OR OPENING ENDS %s openingDuration %d\n",date,openDuration);
+                //printf(">>> CLOSING OR OPENING ENDS %s openingDuration %d\n",date,openDuration);
                 switch (openState){
                     case opening:
                     case open:
                         openState=open;
                         isOpen=1;
+                        sqlite_log(db,date,"O",openDuration);
                         break;
                     case closing:
                     case closed:
                         openState=closed;
                         isOpen=0;
+                        sqlite_log(db,date,"C",openDuration);
                         break;
                     default:
                         openState=unknown;
@@ -214,8 +231,18 @@ int main(int argc, char** argv)
 
     }
 
+    /****************************************************
+     * End of Event Detection Loop
+     ***************************************************/
     if (launchServer){
+        printf("--- Shutting down Webserver\n");
         MHD_stop_daemon (daemon);
+    }
+    if (db !=NULL){
+        sprint_date();
+        sqlite_log(db,date,"S",0);
+        printf("--- Closing database\n");
+        sqlite3_close(db);
     }
     return 0;
 }
@@ -285,24 +312,13 @@ int http_send_request(const char* hostname, unsigned short port, const char* URL
 	close(socket_file_descriptor);
 	return(0);
 }
-/*
-int main(int argc, char** argv) {
-	if(http_send_request("example.com", 80, "/")){
-		fprintf(stderr,"Error\n");
-	}	
-	if(http_send_request("example.com", 80, "/")){
-		fprintf(stderr,"Error\n");
-	}	
-	return 0;
-}
-*/
 
 //helper function to print the date to stdout
 void sprint_date(){
 	time_t now=time(NULL);
 	struct tm* local_time;
 	local_time=localtime(&now);
-	strftime(date,sizeof(date),"%d/%m/%y %H:%M:%S",local_time);	
+	strftime(date,sizeof(date),"%Y-%m-%d %H:%M:%S",local_time);	
 };
 
 //helper function to return the delta in millis since last timestamp. Also reset the timestamp to now
@@ -314,6 +330,7 @@ int get_delta_and_reset(struct timespec *event){
 	return (eventDuration);
 }
 
+// helper function that reads the configuration file
 int parse_config_file(const char* config_file_name){
     config_t cfg;
     config_setting_t *root, *setting, *movie;
@@ -329,20 +346,22 @@ int parse_config_file(const char* config_file_name){
         return(1);
     }
     // Config file parsed, let's use it !
+    printf("--- Parsing config file %s\n",config_lookup_int);
     if(config_lookup_int(&cfg,"motorPPin",&motorPPin)) 
         printf("motorPPin changed to %d\n",motorPPin);     
     if(config_lookup_int(&cfg,"motorNPin",&motorNPin)) 
         printf("motorNPin changed to %d\n",motorNPin);         
     if(config_lookup_int(&cfg,"loopWaitTime",&loopWaitTime))         
         printf("loopWaitTime changed to %d\n",loopWaitTime);
-    if(config_lookup_string(&cfg,"pushHost",&pushHost)) printf("pushHost chanded to %s\n",pushHost);
-    if(config_lookup_string(&cfg,"PDEURL",&PDEURL)) printf("PDEURL chanded to %s\n",PDEURL);
-    if(config_lookup_string(&cfg,"PCEURL",&PCEURL)) printf("PCEURL chanded to %s\n",PCEURL);
-    if(config_lookup_int(&cfg,"launchServer",&launchServer)) printf("launchServer chanded to %d\n",launchServer);
-    if(config_lookup_int(&cfg,"serverPort",&serverPort)) printf("serverPort chanded to %d\n",serverPort);
-    if(config_lookup_int(&cfg,"pushPort",&pushPort)) printf("pushPort chanded to %d\n",pushPort);
-    if(config_lookup_int(&cfg,"pushDetailedEvents",&pushDetailedEvents)) printf("pushDetailedEvents chanded to %d\n",pushDetailedEvents);
-    if(config_lookup_int(&cfg,"pushCoarseEvents",&pushCoarseEvents)) printf("pushCoarseEvents chanded to %d\n",pushCoarseEvents);
+    if(config_lookup_string(&cfg,"pushHost",&pushHost)) printf("pushHost:	%s\n",pushHost);
+    if(config_lookup_string(&cfg,"PDEURL",&PDEURL)) printf("PDEURL:	%s\n",PDEURL);
+    if(config_lookup_string(&cfg,"PCEURL",&PCEURL)) printf("PCEURL:	%s\n",PCEURL);
+    if(config_lookup_string(&cfg,"sqliteDBFile",&sqliteDBName)) printf("sqliteDBName:	%s\n",sqliteDBName);
+    if(config_lookup_int(&cfg,"launchServer",&launchServer)) printf("launchServer:	%d\n",launchServer);
+    if(config_lookup_int(&cfg,"serverPort",&serverPort)) printf("serverPort:	%d\n",serverPort);
+    if(config_lookup_int(&cfg,"pushPort",&pushPort)) printf("pushPort:	%d\n",pushPort);
+    if(config_lookup_int(&cfg,"pushDetailedEvents",&pushDetailedEvents)) printf("pushDetailedEvents:	%d\n",pushDetailedEvents);
+    if(config_lookup_int(&cfg,"pushCoarseEvents",&pushCoarseEvents)) printf("pushCoarseEvents:	%d\n",pushCoarseEvents);
 
     // Now make PDEURL and PCEURL magic by changing @@ with %d
     char* p;
@@ -362,6 +381,8 @@ int parse_config_file(const char* config_file_name){
     }
     return (0);
 }     
+
+//Webserver callback function
 int answer_to_connection (void *cls, struct MHD_Connection *connection,
         const char *url,
         const char *method, const char *version,
@@ -428,21 +449,43 @@ int answer_to_connection (void *cls, struct MHD_Connection *connection,
     return ret;
 }
 
-//Push notifications
+//Push notifications generation
 int report_event(enum openState_t openState, int isOpen){
     char finalURL[250];
-    printf("Would push openState: %d and isOpen: %d\n",openState,isOpen);
+
+    // pushing events to remote webserver if needed
     if(pushHost && PDEURL && pushDetailedEvents){
         snprintf(finalURL,250,PDEURL,openState);
-        printf("%s\npushing PDE %d...",finalURL,openState);
-        if (http_send_request(pushHost,pushPort,finalURL)) printf(" FAIL\n");
-        else printf(" OK\n");
+        http_send_request(pushHost,pushPort,finalURL);
     }
     if(pushHost && PCEURL && pushCoarseEvents){
         snprintf(finalURL,250,PCEURL,isOpen);
-        printf("%s\npushing PCE %d...",finalURL,isOpen);
-        if (http_send_request(pushHost,pushPort,finalURL)) printf(" FAIL\n");
-        else printf(" OK\n");
+        http_send_request(pushHost,pushPort,finalURL);
+    }
+}
+
+// sqlite logging
+int sqlite_log(sqlite3* db, const char* timestamp, const char* event_type,int lastDuration){
+    if (NULL==db) return 1;
+    char req[500];
+    char* error;
+    int rc;
+    snprintf(req,500,"INSERT INTO eventlog(ts,type,length) VALUES('%s','%s',0);",timestamp,event_type);
+    rc=sqlite3_exec(db,req,0,0,&error);
+    if (rc != SQLITE_OK){
+        fprintf(stderr, "sqlite insert error %d: %s\nrequest:%s\n",rc,error,req);
+        sqlite3_free(error);
+        return(rc);
+    }
+    //update event duration
+    if (lastDuration >0){
+        snprintf(req,500,"update eventlog set length = %d where id = (select max(id) from eventlog limit 1);",lastDuration);
+        rc=sqlite3_exec(db,req,0,0,&error);
+        if (rc != SQLITE_OK){
+            fprintf(stderr, "sqlite update duration error %d: %s\nrequest: %s\n",rc,error,req);
+            sqlite3_free(error);
+            return(rc);
+        }
     }
 }
 
@@ -450,3 +493,43 @@ int report_event(enum openState_t openState, int isOpen){
 void sig_handler(int sig){
     exitLoop = 1;
 }
+
+// Database creation
+int create_db(sqlite3 *db){
+    int rc;
+    char *error;
+    char *test = "SELECT id,ts,type,length from eventlog limit 1;";
+    char *sql= "CREATE TABLE eventlog(" \
+                "id   INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL," \
+                "ts   DATETIME NOT NULL," \
+                "type CHAR(1) NOT NULL DEFAULT('?') REFERENCES eventtypes(chartype),"\
+                "length INTEGER NOT NULL DEFAULT(0)"\
+                ");" \
+                "CREATE TABLE eventtype(" \
+                "chartype CHAR(1) PRIMARY KEY NOT NULL," \
+                "name VARCHAR(15) NOT NULL" \
+                ");" \
+                "INSERT INTO eventtype(chartype,name) VALUES('?','unknown');" \
+                "INSERT INTO eventtype(chartype,name) VALUES('o','opening');" \
+                "INSERT INTO eventtype(chartype,name) VALUES('c','closing');" \
+                "INSERT INTO eventtype(chartype,name) VALUES('O','open');" \
+                "INSERT INTO eventtype(chartype,name) VALUES('C','closed');" \
+                "INSERT INTO eventtype(chartype,name) VALUES('B','boot');" \
+                "INSERT INTO eventtype(chartype,name) VALUES('S','shutdown');"; 
+
+    if(db == NULL) return 1;
+    //test if we can read from db
+    rc=sqlite3_exec(db,test,0,0,&error);
+    if (rc != SQLITE_OK) {
+        sqlite3_free(error);
+        //not ok, create db
+        rc=sqlite3_exec(db,sql,0,0,&error);
+        if (rc != SQLITE_OK){
+            fprintf(stderr,"Error %d:%s\n",rc,error);
+            return rc;
+        }
+    } else {
+        return 0;
+    }
+}
+
