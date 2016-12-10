@@ -1,0 +1,30 @@
+#!/bin/bash
+# /etc/init.d/gatekeeperdmn
+
+### BEGIN INIT INFO
+# Provides:          gatekeeper
+# Required-Start:    $remote_fs $syslog
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Gate control
+# Description:       This is used to log gate state
+### END INIT INFO
+
+
+case "$1" in 
+    start)
+        echo "Starting gatekeeper"
+        /usr/bin/gatekeeper -c /etc/gatekeeper/gatekeeper.cfg >>/var/log/gatekeeper.log 2>&1 &
+        ;;
+    stop)
+        echo "Stopping gatekeeper"
+        killall gatekeeper
+        ;;
+    *)
+        echo "Usage: /etc/init.d/servod start|stop"
+        exit 1
+        ;;
+esac
+
+exit 0
