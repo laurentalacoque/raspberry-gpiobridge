@@ -7,10 +7,10 @@ The motor M1+- signals are connected to raspberry GPIO 0/1 (Through optocoupler)
 This daemon keeps track of the gate state (open, opening, closed, closing), logs theses states in a sqlite3 database, push them to a web server (only GET requests) and starts and embedded webserver to report the current state (pull).
 
 ## Internal webserver pages
-# /gateState
+### /gateState
 This page contains a single digit (0/1) to report if the state is closed/open
 
-# /gateStateFull
+### /gateStateFull
 This page contains a single digit (0-4) to report the gate state
 
 0: unknown
@@ -23,5 +23,5 @@ This page contains a single digit (0-4) to report the gate state
 
 4: closed
 
-# /gateStateHuman
+#### /gateStateHuman
 This page contains a human readable state for the gate state.
