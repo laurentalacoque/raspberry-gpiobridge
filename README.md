@@ -28,3 +28,40 @@ This page contains a single digit (0-4) to report the gate state
 
 #### /gateStateHuman
 This page contains a human readable state for the gate state.
+
+## Push URLs
+Apart from pulling some information from the raspberry, you can push events to a webserver or home automation box
+
+### configuration
+For push operations to work, you need to indicate the push host, port and URL in the configuration file and launch `gatekeeper -c <pathtoconfiguration>`
+
+Say you want to report (simple) states to host 192.168.0.200 on port 80 with an url `/logdata?key=mystate&value=<thenewvalue>`
+
+The `<thenewvalue>` part is easily replaced by the new value placeholder `@@`
+```
+pushHost           = "192.168.0.200"; // host to push to
+pushPort           = 80; //push port
+pushCoarseEvents   = 1; //should we push coarse events? (open, closed), use '@@' as placeholder for the value
+PCEURL             = "/logdata?key=mystate&value=@@";
+```
+
+### jeedom configuration
+Let's take an example. Suppose you've got a jeedom box on the same network at adress 192.168.0.200
+
+You already configured a virtual element "Gate State" and added two informations lines "state" (binary) and "full state" (numeric)
+
+You can check the ids of both informations on the left of the virtual element configuration page.
+Let's say that "state" has id 350 and "full state" has id 351.
+
+You'll also need to get your API key from the configuration page.
+
+Then change the configuration file to this :
+
+```
+pushHost           = "192.168.0.200"; // host to push to
+pushPort           = 80; //push port
+pushDetailedEvents = 1; //should we push detailed events? (opening, open, closing, closed), use '@@' as placeholder for the value
+PDEURL             = "/core/api/jeeApi.php?api=<YOURAPIKEY>&type=virtual&id=351&value=@@";
+pushCoarseEvents   = 1; //should we push coarse events? (open, closed), use '@@' as placeholder for the value
+PCEURL             = "/core/api/jeeApi.php?api=<YOURAPIKEY>&type=virtual&id=367&value=@@";
+```
