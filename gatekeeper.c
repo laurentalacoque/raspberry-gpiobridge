@@ -84,6 +84,7 @@ char date[100];
 void sprint_date();
 //helper function to return the delta in millis since last timestamp. Also reset the timestamp to now
 int get_delta_and_reset(struct timespec *event);
+int get_delta(struct timespec *event);
 int parse_config_file(const char* config_file_name);
 int answer_to_connection (void *cls, struct MHD_Connection *connection,
         const char *url,
@@ -165,72 +166,105 @@ int main(int argc, char** argv)
     /****************************************************
      * Event Detection Loop
      ***************************************************/
-    int openDuration=0;
-    int idleDuration=0;
-    // Loop (while(1)):
+    // Loop until a CTRL+C or a SIGTERM
+    int event;
+    struct timespec eventTS;
+    int reported=0;
+    int lastReport=0;
+    struct timespec lastReportTS;
+    char* evtype="#oc-";
+    int maxNumberOfOpposites = 5;
+    int eventDelay = get_delta_and_reset(&lastReportTS);
     while(!exitLoop)
     {
+        //Read motor state on the GPIO
         gateState = digitalRead(motorPPin) << 1 | digitalRead(motorNPin);
-        //reset idletime if needed
-        if (gateState != IDLE) { idleDuration =0; get_delta_and_reset(&idleLast);}
-        //check for state change
-        if (gateState != oldGateState) {
-            int eventDelay = get_delta_and_reset(&gateStateLast);
-            //detect start of opening and closing events
-            if (openDuration == 0) {
-                sprint_date();
-                if (gateState == OPENING) { 
-                    printf(">>> OPENING START %s\n",date); 
+        if (gateState != oldGateState){
+            //New state
+            event=gateState;
+            get_delta_and_reset(&eventTS);
+            reported=0;
+            //printf(" %c",evtype[event]); fflush(stdout);
+            // check if this event is opposite to the current one
+            // and decrement the counter;
+            if (lastReport == CLOSING && event == OPENING) {
+                if(maxNumberOfOpposites-- < 0){
+                    // we're slowly opening for a long time
+                    //TODO report opening
+                    //printf("\n<> o\n");
+                    lastReport=event;
+                    eventDelay=get_delta_and_reset(&lastReportTS);
+                    maxNumberOfOpposites=5;
                     openState=opening; 
                     isOpen=1;
-                    sqlite_log(db,date,"o",eventDelay);
-                } else if (gateState == CLOSING) { 
-                    printf(">>> CLOSING START %s\n",date); 
+                    sqlite_log(db,date,"o",eventDelay/1000);
+                    report_event(openState,isOpen);
+                }
+            }
+            if (lastReport == OPENING && event == CLOSING) {
+                if(maxNumberOfOpposites-- < 0){
+                    // we're slowly closing for a long time
+                    //TODO report closing
+                    //printf("\n<> c\n");
+                    lastReport=event;
+                    eventDelay=get_delta_and_reset(&lastReportTS);
+                    maxNumberOfOpposites=5;
                     openState=closing; 
                     isOpen=0;
-                    sqlite_log(db,date,"c",eventDelay);
+                    sqlite_log(db,date,"c",eventDelay/1000);
+                    report_event(openState,isOpen);
                 }
-                report_event(openState,isOpen);
             }
-            //cumulate closing and opening time
-            if (oldGateState == OPENING) openDuration += eventDelay;
-            else if (oldGateState == CLOSING) openDuration -= eventDelay;
-        } else if (gateState == IDLE && oldGateState == IDLE) {
-            // cumulate idle duration
-            idleDuration += get_delta_and_reset(&idleLast);
-            // if idle for more than a given time, generate end event
-            if ((openDuration !=0) && (idleDuration > maxIdleTimeBeforeEvent)) {
-                sprint_date();
-                //printf(">>> CLOSING OR OPENING ENDS %s openingDuration %d\n",date,openDuration);
-                switch (openState){
-                    case opening:
-                    case open:
-                        openState=open;
-                        isOpen=1;
-                        sqlite_log(db,date,"O",openDuration);
-                        break;
-                    case closing:
-                    case closed:
-                        openState=closed;
-                        isOpen=0;
-                        sqlite_log(db,date,"C",-openDuration);
-                        break;
-                    default:
-                        openState=unknown;
-                        isOpen=-1;
+
+        } else {
+        //Same state as before
+            if (!reported && get_delta(&eventTS) > maxIdleTimeBeforeEvent) {
+                //printf("\n%c event confirmed\n",evtype[event]);
+                reported=1;
+                eventDelay=get_delta_and_reset(&lastReportTS);
+                if (event != lastReport) {
+                //TODO report it!
+                    if (event == IDLE) {
+                        //printf(">>> %c\n",evtype[lastReport]);
+                        //report it
+                        sprint_date();
+                        if (lastReport == OPENING) { 
+                            openState=open; 
+                            isOpen=1;
+                            sqlite_log(db,date,"O",eventDelay/1000);
+                        } else if (lastReport == CLOSING) { 
+                            openState=closed; 
+                            isOpen=0;
+                            sqlite_log(db,date,"C",eventDelay/1000);
+                        }
+                        report_event(openState,isOpen);
+                    }
+                    else {
+                        //printf(">  %c\n",evtype[event]);
+                        //report it
+                        sprint_date();
+                        if (event == OPENING) { 
+                            openState=opening; 
+                            isOpen=1;
+                            sqlite_log(db,date,"o",eventDelay/1000);
+                        } else if (event == CLOSING) { 
+                            openState=closing; 
+                            isOpen=0;
+                            sqlite_log(db,date,"c",eventDelay/1000);
+                        }
+                        report_event(openState,isOpen);
+                    }
                 }
-                report_event(openState,isOpen);
-                openDuration =0;
+                lastReport=event;
+                maxNumberOfOpposites=5;
             }
         }
 
         // now save these variable for later
         oldGateState=gateState;
-
         delay(loopWaitTime); // Wait 200ms again
 
     }
-
     /****************************************************
      * End of Event Detection Loop
      ***************************************************/
@@ -327,6 +361,12 @@ int get_delta_and_reset(struct timespec *event){
 	clock_gettime(CLOCK_MONOTONIC_RAW,&eventTime);
 	int eventDuration =  ((eventTime.tv_sec - event->tv_sec)*1000000 + ((eventTime.tv_nsec - event->tv_nsec)/1000)) / 1000;
 	*event=eventTime;
+	return (eventDuration);
+}
+int get_delta(struct timespec *event){
+	struct timespec eventTime;
+	clock_gettime(CLOCK_MONOTONIC_RAW,&eventTime);
+	int eventDuration =  ((eventTime.tv_sec - event->tv_sec)*1000000 + ((eventTime.tv_nsec - event->tv_nsec)/1000)) / 1000;
 	return (eventDuration);
 }
 
